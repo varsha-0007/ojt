@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #0f1115;
+  color: #e5e7eb;
+}
+
+@layer components {
+  .input {
+    @apply bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm w-full text-gray-100 focus:outline-none focus:border-blue-500;
+  }
+}
