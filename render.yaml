@@ -1,0 +1,29 @@
+databases:
+  - name: rate-limiter-db
+    databaseName: rate_limiter
+    plan: free
+
+services:
+  - type: redis
+    name: rate-limiter-redis
+    plan: free
+    ipAllowList: []
+
+  - type: web
+    name: rate-limiter-backend
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rate-limiter-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: rate-limiter-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
