@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Dummy Website (Test Client)</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #0f1115; color: #e5e7eb; max-width: 650px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 20px; }
+  .subtitle { color: #9ca3af; font-size: 13px; margin-bottom: 20px; }
+  .box { background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  input, select { background: #09090b; border: 1px solid #27272a; color: #e5e7eb; padding: 8px; border-radius: 5px; margin-right: 8px; }
+  button { background: #3b82f6; color: white; border: none; padding: 9px 16px; border-radius: 5px; cursor: pointer; margin-right: 8px; }
+  button.secondary { background: transparent; border: 1px solid #27272a; color: #e5e7eb; }
+  #log { background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 10px; height: 240px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+  .ok { color: #4ade80; }
+  .fail { color: #f87171; }
+  .stats { display: flex; gap: 14px; margin-bottom: 12px; }
+  .stat { flex: 1; background: #09090b; border-radius: 8px; padding: 10px; text-align: center; }
+  .stat .num { font-size: 20px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+  <h1>Dummy Website (Test Client)</h1>
+  <div class="subtitle">Sends repeated requests to the Demo API so you can watch the rate limiter in action.</div>
+
+  <div class="box">
+    <label>Backend URL: </label>
+    <input id="backendUrl" value="http://localhost:8000" size="26" />
+    <br /><br />
+    <label>Endpoint: </label>
+    <select id="endpoint">
+      <option value="/demo/books">GET /demo/books</option>
+      <option value="/demo/login">POST /demo/login</option>
+      <option value="/demo/orders">POST /demo/orders</option>
+    </select>
+  </div>
+
+  <div class="box">
+    <button onclick="sendOne()">Send 1 Request</button>
+    <button onclick="sendBurst()">Send 10 Requests (burst)</button>
+    <button class="secondary" onclick="clearLog()">Clear</button>
+  </div>
+
+  <div class="box">
+    <div class="stats">
+      <div class="stat"><div class="num" id="totalNum">0</div>Total</div>
+      <div class="stat"><div class="num ok" id="okNum">0</div>Allowed</div>
+      <div class="stat"><div class="num fail" id="failNum">0</div>Rejected</div>
+    </div>
+    <div id="log"></div>
+  </div>
+
+<script>
+  let total = 0, ok = 0, fail = 0;
+
+  function log(msg, cls) {
+    const box = document.getElementById("log");
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function updateStats() {
+    document.getElementById("totalNum").textContent = total;
+    document.getElementById("okNum").textContent = ok;
+    document.getElementById("failNum").textContent = fail;
+  }
+
+  function bodyFor(endpoint) {
+    if (endpoint === "/demo/login") return { username: "demo", password: "demo123" };
+    if (endpoint === "/demo/orders") return { book_id: 1, quantity: 1 };
+    return null;
+  }
+
+  async function sendOne() {
+    const backendUrl = document.getElementById("backendUrl").value.replace(/\/$/, "");
+    const endpoint = document.getElementById("endpoint").value;
+    const method = endpoint === "/demo/books" ? "GET" : "POST";
+    const body = bodyFor(endpoint);
+
+    total++;
+    try {
+      const res = await fetch(backendUrl + endpoint, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+      if (res.status === 429) {
+        fail++;
+        log(`${method} ${endpoint} -> 429 Too Many Requests`, "fail");
+      } else {
+        ok++;
+        log(`${method} ${endpoint} -> ${res.status} OK`, "ok");
+      }
+    } catch (err) {
+      fail++;
+      log(`${method} ${endpoint} -> Network error: ${err.message}`, "fail");
+      log(`(Check: is the backend running? Is the Backend URL above correct?)`, "fail");
+    }
+    updateStats();
+  }
+
+  async function sendBurst() {
+    for (let i = 0; i < 10; i++) {
+      sendOne();
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+
+  function clearLog() {
+    document.getElementById("log").innerHTML = "";
+    total = ok = fail = 0;
+    updateStats();
+  }
+</script>
+</body>
+</html>
