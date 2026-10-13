@@ -49,10 +49,20 @@ export async function apiPost(path, body) {
   return handleResponse(res);
 }
 
-export async function apiPatch(path) {
+export async function apiPut(path, body) {
+  const res = await fetch(getBackendUrl() + path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  return handleResponse(res);
+}
+
+export async function apiPatch(path, body) {
   const res = await fetch(getBackendUrl() + path, {
     method: "PATCH",
-    headers: { ...authHeaders() },
+    headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...authHeaders() },
+    body: body ? JSON.stringify(body) : undefined,
   });
   return handleResponse(res);
 }
@@ -67,8 +77,13 @@ export async function apiDelete(path) {
 
 // ---------------- Auth ----------------
 
-export async function signup(email, password) {
-  const data = await apiPost("/auth/signup", { email, password });
+export async function signup(companyName, targetUrl, email, password) {
+  const data = await apiPost("/auth/signup", {
+    company_name: companyName,
+    target_url: targetUrl || null,
+    email,
+    password,
+  });
   setToken(data.access_token);
   return data.user;
 }
