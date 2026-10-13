@@ -2,51 +2,94 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Dummy Website (Test Client)</title>
+<title>API Rate Limiter - Multi-Company Test Client</title>
 <style>
-  body { font-family: Arial, sans-serif; background: #0f1115; color: #e5e7eb; max-width: 650px; margin: 40px auto; padding: 0 16px; }
-  h1 { font-size: 20px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #0f1115; color: #e5e7eb; max-width: 720px; margin: 30px auto; padding: 0 16px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
   .subtitle { color: #9ca3af; font-size: 13px; margin-bottom: 20px; }
   .box { background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-  input, select { background: #09090b; border: 1px solid #27272a; color: #e5e7eb; padding: 8px; border-radius: 5px; margin-right: 8px; }
-  button { background: #3b82f6; color: white; border: none; padding: 9px 16px; border-radius: 5px; cursor: pointer; margin-right: 8px; }
+  label { font-size: 12px; color: #9ca3af; display: block; margin-bottom: 4px; }
+  .row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+  .row:last-child { margin-bottom: 0; }
+  input, select { background: #09090b; border: 1px solid #27272a; color: #e5e7eb; padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%; box-sizing: border-box; }
+  input:focus, select:focus { outline: none; border-color: #3b82f6; }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  button { background: #3b82f6; color: white; border: none; padding: 9px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.15s; }
+  button:hover { background: #2563eb; }
   button.secondary { background: transparent; border: 1px solid #27272a; color: #e5e7eb; }
-  #log { background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 10px; height: 240px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+  button.secondary:hover { background: #27272a; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #log { background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 10px; height: 260px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
   .ok { color: #4ade80; }
   .fail { color: #f87171; }
+  .info { color: #60a5fa; }
   .stats { display: flex; gap: 14px; margin-bottom: 12px; }
-  .stat { flex: 1; background: #09090b; border-radius: 8px; padding: 10px; text-align: center; }
-  .stat .num { font-size: 20px; font-weight: bold; }
+  .stat { flex: 1; background: #09090b; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid #27272a; }
+  .stat .num { font-size: 24px; font-weight: bold; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #27272a; color: #9ca3af; margin-left: 6px; }
 </style>
 </head>
 <body>
 
-  <h1>Dummy Website (Test Client)</h1>
-  <div class="subtitle">Sends repeated requests to the Demo API so you can watch the rate limiter in action.</div>
+  <h1>Dummy Website (Multi-Company Simulator)</h1>
+  <div class="subtitle">Simulate real-time traffic and true instantaneous burst concurrency across different SaaS tenant companies.</div>
 
   <div class="box">
-    <label>Backend URL: </label>
-    <input id="backendUrl" value="http://localhost:8000" size="26" />
-    <br /><br />
-    <label>Endpoint: </label>
-    <select id="endpoint">
-      <option value="/demo/books">GET /demo/books</option>
-      <option value="/demo/login">POST /demo/login</option>
-      <option value="/demo/orders">POST /demo/orders</option>
-    </select>
+    <div class="row">
+      <div style="flex: 2;">
+        <label>Rate Limiter Backend URL</label>
+        <input id="backendUrl" value="http://localhost:8000" />
+      </div>
+      <div style="flex: 3;">
+        <label>Company API Key (Copy from Dashboard top bar to test a specific company)</label>
+        <input id="apiKey" placeholder="e.g. cmp_demo_key_1234567890 (blank = default company)" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="flex: 1;">
+        <label>HTTP Method</label>
+        <select id="method">
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="DELETE">DELETE</option>
+        </select>
+      </div>
+      <div style="flex: 3;">
+        <label>API Endpoint Path (Select preset or type any custom route)</label>
+        <input id="endpointInput" value="/demo/books" placeholder="/demo/books or /demo/login or custom path" list="presetEndpoints" />
+        <datalist id="presetEndpoints">
+          <option value="/demo/books">GET /demo/books</option>
+          <option value="/demo/login">POST /demo/login</option>
+          <option value="/demo/orders">POST /demo/orders</option>
+        </datalist>
+      </div>
+      <div style="flex: 1.5;">
+        <label>Burst Amount</label>
+        <select id="burstCount">
+          <option value="5">5 Requests</option>
+          <option value="10" selected>10 Requests</option>
+          <option value="20">20 Requests</option>
+          <option value="50">50 Requests</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <div class="box">
-    <button onclick="sendOne()">Send 1 Request</button>
-    <button onclick="sendBurst()">Send 10 Requests (burst)</button>
-    <button class="secondary" onclick="clearLog()">Clear</button>
+    <div class="buttons">
+      <button id="btnSingle" onclick="sendOne()">Send 1 Request</button>
+      <button id="btnBurst" onclick="sendTrueBurst()">Send True Concurrent Burst 🚀</button>
+      <button class="secondary" onclick="clearLog()">Clear Stats & Logs</button>
+    </div>
   </div>
 
   <div class="box">
     <div class="stats">
-      <div class="stat"><div class="num" id="totalNum">0</div>Total</div>
-      <div class="stat"><div class="num ok" id="okNum">0</div>Allowed</div>
-      <div class="stat"><div class="num fail" id="failNum">0</div>Rejected</div>
+      <div class="stat"><div class="num" id="totalNum">0</div>Total Sent</div>
+      <div class="stat"><div class="num ok" id="okNum">0</div>Allowed (200)</div>
+      <div class="stat"><div class="num fail" id="failNum">0</div>Rejected (429)</div>
     </div>
     <div id="log"></div>
   </div>
@@ -69,46 +112,71 @@
     document.getElementById("failNum").textContent = fail;
   }
 
-  function bodyFor(endpoint) {
+  function getBody(endpoint, method) {
+    if (method === "GET") return null;
     if (endpoint === "/demo/login") return { username: "demo", password: "demo123" };
     if (endpoint === "/demo/orders") return { book_id: 1, quantity: 1 };
-    return null;
+    return { test: true, timestamp: Date.now() };
   }
 
-  async function sendOne() {
+  async function executeSingleRequest() {
     const backendUrl = document.getElementById("backendUrl").value.replace(/\/$/, "");
-    const endpoint = document.getElementById("endpoint").value;
-    const method = endpoint === "/demo/books" ? "GET" : "POST";
-    const body = bodyFor(endpoint);
+    const endpoint = document.getElementById("endpointInput").value.trim() || "/demo/books";
+    const method = document.getElementById("method").value;
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const body = getBody(endpoint, method);
+
+    const headers = {};
+    if (body) headers["Content-Type"] = "application/json";
+    if (apiKey) headers["X-Company-Key"] = apiKey;
 
     total++;
     try {
       const res = await fetch(backendUrl + endpoint, {
         method,
-        headers: body ? { "Content-Type": "application/json" } : {},
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       });
 
       if (res.status === 429) {
         fail++;
-        log(`${method} ${endpoint} -> 429 Too Many Requests`, "fail");
+        const data = await res.json().catch(() => ({}));
+        const policyName = data.policy ? ` (${data.policy})` : "";
+        log(`${method} ${endpoint} -> 429 Too Many Requests${policyName}`, "fail");
       } else {
         ok++;
         log(`${method} ${endpoint} -> ${res.status} OK`, "ok");
       }
     } catch (err) {
       fail++;
-      log(`${method} ${endpoint} -> Network error: ${err.message}`, "fail");
-      log(`(Check: is the backend running? Is the Backend URL above correct?)`, "fail");
+      log(`${method} ${endpoint} -> Network Error: ${err.message}`, "fail");
     }
+  }
+
+  async function sendOne() {
+    await executeSingleRequest();
     updateStats();
   }
 
-  async function sendBurst() {
-    for (let i = 0; i < 10; i++) {
-      sendOne();
-      await new Promise((r) => setTimeout(r, 150));
-    }
+  // True Simultaneous Concurrent Burst: Uses Promise.all with zero artificial delay
+  // This guarantees all N requests hit the rate limiter at the exact same millisecond
+  async function sendTrueBurst() {
+    const count = parseInt(document.getElementById("burstCount").value, 10) || 10;
+    const endpoint = document.getElementById("endpointInput").value.trim() || "/demo/books";
+    const btnBurst = document.getElementById("btnBurst");
+    const btnSingle = document.getElementById("btnSingle");
+
+    btnBurst.disabled = true;
+    btnSingle.disabled = true;
+
+    log(`>>> Firing ${count} simultaneous requests concurrently at ${endpoint} ...`, "info");
+
+    const requests = Array.from({ length: count }, () => executeSingleRequest());
+    await Promise.all(requests);
+
+    updateStats();
+    btnBurst.disabled = false;
+    btnSingle.disabled = false;
   }
 
   function clearLog() {
@@ -116,6 +184,16 @@
     total = ok = fail = 0;
     updateStats();
   }
+
+  // Auto-adjust method when picking standard endpoints
+  document.getElementById("endpointInput").addEventListener("input", function(e) {
+    const val = e.target.value;
+    if (val === "/demo/login" || val === "/demo/orders") {
+      document.getElementById("method").value = "POST";
+    } else if (val === "/demo/books") {
+      document.getElementById("method").value = "GET";
+    }
+  });
 </script>
 </body>
 </html>
