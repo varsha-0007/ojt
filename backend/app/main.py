@@ -1,4 +1,5 @@
 import os
+import secrets
 from typing import Optional
 import httpx
 import redis
@@ -10,12 +11,14 @@ from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.database import get_db, engine, Base, SessionLocal
-from app.models import Policy, RequestLog, User
+from app.models import Policy, RequestLog, User, Company
 from app.schemas import (
-    PolicyCreate, PolicyOut, LoginRequest, OrderRequest, TrackEvent,
+    PolicyCreate, PolicyUpdate, PolicyOut, LoginRequest, OrderRequest, TrackEvent,
     SignupRequest, LoginCredentials, UserOut, TokenResponse, CreateUserByOwner,
+    RequestLogOut,
 )
 from app import bucket, metrics, auth
 
@@ -37,8 +40,27 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def find_policy_for_request(db: Session, path: str, method: str):
-    policies = db.query(Policy).filter(Policy.enabled == True).all()  # noqa: E712
+def user_to_out(user: User) -> UserOut:
+    company = user.company
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        is_primary=user.is_primary,
+        company_id=user.company_id,
+        company_name=company.name if company else None,
+        company_api_key=company.api_key if company else None,
+        company_target_url=company.target_url if company else None,
+        created_at=user.created_at,
+    )
+
+
+def find_policy_for_request(db: Session, path: str, method: str, company_id: Optional[int] = None):
+    query = db.query(Policy).filter(Policy.enabled == True)  # noqa: E712
+    if company_id is not None:
+        query = query.filter(Policy.company_id == company_id)
+    policies = query.all()
+
     exact_match = None
     wildcard_match = None
     for p in policies:
@@ -63,7 +85,15 @@ async def rate_limit_middleware(request: Request, call_next):
 
     db = SessionLocal()
     try:
-        policy = find_policy_for_request(db, path, request.method)
+        api_key = request.headers.get("x-company-key") or request.headers.get("x-api-key") or request.query_params.get("api_key")
+        company = None
+        if api_key:
+            company = db.query(Company).filter(Company.api_key == api_key).first()
+        if not company:
+            company = db.query(Company).first()
+        company_id = company.id if company else None
+
+        policy = find_policy_for_request(db, path, request.method, company_id=company_id)
         if policy is None:
             return await call_next(request)
 
@@ -71,22 +101,46 @@ async def rate_limit_middleware(request: Request, call_next):
         allowed = bucket.is_allowed(
             redis_conn, policy.id, client_hash,
             policy.capacity, policy.refill_tokens, policy.refill_seconds,
+            company_id=company_id,
         )
 
         if not allowed:
-            db.add(RequestLog(endpoint=path, client_hash=client_hash, status="rejected", source="proxy"))
+            db.add(RequestLog(
+                endpoint=path,
+                method=request.method,
+                client_hash=client_hash,
+                status="rejected",
+                source="proxy",
+                company_id=company_id,
+                policy_name=policy.name,
+            ))
             db.commit()
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many requests. Please slow down.", "policy": policy.name},
+                headers={
+                    "X-RateLimit-Limit": str(policy.capacity),
+                    "X-RateLimit-Remaining": "0",
+                    "Retry-After": str(policy.refill_seconds),
+                },
             )
 
         if policy.forward_url:
             response = await forward_request(request, policy.forward_url)
+        elif company and company.target_url and not path.startswith("/demo"):
+            response = await forward_request(request, company.target_url)
         else:
             response = await call_next(request)
 
-        db.add(RequestLog(endpoint=path, client_hash=client_hash, status="allowed", source="proxy"))
+        db.add(RequestLog(
+            endpoint=path,
+            method=request.method,
+            client_hash=client_hash,
+            status="allowed",
+            source="proxy",
+            company_id=company_id,
+            policy_name=policy.name,
+        ))
         db.commit()
         return response
     finally:
@@ -123,6 +177,40 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        # Schema migration helper for existing Postgres / SQLite tables
+        try:
+            db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS company_id INTEGER"))
+            db.execute(text("ALTER TABLE policies ADD COLUMN IF NOT EXISTS company_id INTEGER"))
+            db.execute(text("ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS company_id INTEGER"))
+            db.execute(text("ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS method VARCHAR DEFAULT 'GET'"))
+            db.execute(text("ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS policy_name VARCHAR"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        # Seed initial default company if none exists
+        default_company = db.query(Company).first()
+        if not default_company:
+            default_company = Company(
+                name="Demo Company",
+                target_url=None,
+                api_key="cmp_demo_key_1234567890",
+            )
+            db.add(default_company)
+            db.commit()
+            db.refresh(default_company)
+
+        # Attach orphaned users and policies to default company
+        db.query(User).filter(User.company_id.is_(None)).update({"company_id": default_company.id})
+        db.query(Policy).filter(Policy.company_id.is_(None)).update({"company_id": default_company.id})
+        db.query(RequestLog).filter(RequestLog.company_id.is_(None)).update({"company_id": default_company.id})
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 @app.get("/health")
@@ -137,25 +225,47 @@ def normalize_email(email: str) -> str:
 @app.post("/auth/signup", response_model=TokenResponse)
 def signup(data: SignupRequest, db: Session = Depends(get_db)):
     email = normalize_email(data.email)
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
+    company_name = data.company_name.strip()
+
+    if not company_name:
+        raise HTTPException(status_code=400, detail="Company name is required")
+
+    existing_company = db.query(Company).filter(Company.name == company_name).first()
+    if existing_company:
+        raise HTTPException(status_code=400, detail="A company with this name already exists")
+
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
         raise HTTPException(status_code=400, detail="An account with this email already exists")
+
     if len(data.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    is_first_account = db.query(User).count() == 0
+    # Create the Company for this SaaS tenant
+    target_url = data.target_url.strip() if data.target_url else None
+    company = Company(
+        name=company_name,
+        target_url=target_url,
+        api_key=f"cmp_{secrets.token_hex(16)}",
+    )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+
+    # The user who signs up the company is always the company's owner
     user = User(
         email=email,
         password_hash=auth.hash_password(data.password),
-        role="owner" if is_first_account else "viewer",
-        is_primary=is_first_account,
+        role="owner",
+        is_primary=True,
+        company_id=company.id,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    token = auth.create_access_token(user.id, user.email, user.role)
-    return {"access_token": token, "user": user}
+    token = auth.create_access_token(user.id, user.email, user.role, company_id=company.id)
+    return {"access_token": token, "user": user_to_out(user)}
 
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -165,18 +275,24 @@ def login(data: LoginCredentials, db: Session = Depends(get_db)):
     if not user or not auth.verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    token = auth.create_access_token(user.id, user.email, user.role)
-    return {"access_token": token, "user": user}
+    token = auth.create_access_token(user.id, user.email, user.role, company_id=user.company_id)
+    return {"access_token": token, "user": user_to_out(user)}
 
 
 @app.get("/auth/me", response_model=UserOut)
 def get_me(current_user: User = Depends(auth.get_current_user)):
-    return current_user
+    return user_to_out(current_user)
 
 
 @app.get("/auth/users", response_model=list[UserOut])
 def list_users(current_user: User = Depends(auth.require_owner), db: Session = Depends(get_db)):
-    return db.query(User).order_by(User.created_at.asc()).all()
+    users = (
+        db.query(User)
+        .filter(User.company_id == current_user.company_id)
+        .order_by(User.created_at.asc())
+        .all()
+    )
+    return [user_to_out(u) for u in users]
 
 
 @app.post("/auth/users", response_model=UserOut)
@@ -195,22 +311,28 @@ def create_user(
     if existing:
         raise HTTPException(status_code=400, detail="An account with this email already exists")
 
-    user = User(email=email, password_hash=auth.hash_password(data.password), role=data.role, is_primary=False)
+    user = User(
+        email=email,
+        password_hash=auth.hash_password(data.password),
+        role=data.role,
+        is_primary=False,
+        company_id=current_user.company_id,
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return user_to_out(user)
 
 
 @app.delete("/auth/users/{user_id}")
 def delete_user(user_id: int, current_user: User = Depends(auth.require_owner), db: Session = Depends(get_db)):
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="You can't remove your own account")
-    row = db.query(User).filter(User.id == user_id).first()
+    row = db.query(User).filter(User.id == user_id, User.company_id == current_user.company_id).first()
     if not row:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found in your company")
     if row.is_primary:
-        raise HTTPException(status_code=400, detail="The primary owner account can't be removed by anyone")
+        raise HTTPException(status_code=400, detail="The primary company owner account cannot be removed")
     db.delete(row)
     db.commit()
     return {"status": "deleted"}
@@ -218,7 +340,19 @@ def delete_user(user_id: int, current_user: User = Depends(auth.require_owner), 
 
 @app.post("/policies", response_model=PolicyOut)
 def create_policy(policy: PolicyCreate, current_user: User = Depends(auth.require_owner), db: Session = Depends(get_db)):
-    row = Policy(**policy.model_dump())
+    # Duplicate prevention: Check if same endpoint + method already exists in this company
+    existing = db.query(Policy).filter(
+        Policy.company_id == current_user.company_id,
+        Policy.endpoint == policy.endpoint,
+        Policy.method == policy.method,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A policy for endpoint '{policy.endpoint}' with method '{policy.method}' already exists for your company.",
+        )
+
+    row = Policy(**policy.model_dump(), company_id=current_user.company_id)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -227,7 +361,38 @@ def create_policy(policy: PolicyCreate, current_user: User = Depends(auth.requir
 
 @app.get("/policies", response_model=list[PolicyOut])
 def list_policies(current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
-    return db.query(Policy).order_by(Policy.created_at.desc()).all()
+    return (
+        db.query(Policy)
+        .filter(Policy.company_id == current_user.company_id)
+        .order_by(Policy.created_at.desc())
+        .all()
+    )
+
+
+@app.put("/policies/{policy_id}", response_model=PolicyOut)
+@app.patch("/policies/{policy_id}", response_model=PolicyOut)
+def update_policy(
+    policy_id: int,
+    policy_data: PolicyUpdate,
+    current_user: User = Depends(auth.require_owner),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Policy).filter(Policy.id == policy_id, Policy.company_id == current_user.company_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Policy not found")
+
+    # Update attributes while preserving the immutable endpoint path
+    row.name = policy_data.name
+    row.method = policy_data.method
+    row.capacity = policy_data.capacity
+    row.refill_tokens = policy_data.refill_tokens
+    row.refill_seconds = policy_data.refill_seconds
+    row.forward_url = policy_data.forward_url
+    row.enabled = policy_data.enabled
+
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @app.patch("/policies/{policy_id}/status", response_model=PolicyOut)
@@ -237,7 +402,7 @@ def update_policy_status(
     current_user: User = Depends(auth.require_owner),
     db: Session = Depends(get_db),
 ):
-    row = db.query(Policy).filter(Policy.id == policy_id).first()
+    row = db.query(Policy).filter(Policy.id == policy_id, Policy.company_id == current_user.company_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Policy not found")
     row.enabled = enabled
@@ -248,7 +413,10 @@ def update_policy_status(
 
 @app.delete("/policies/{policy_id}")
 def delete_policy(policy_id: int, current_user: User = Depends(auth.require_owner), db: Session = Depends(get_db)):
-    db.query(Policy).filter(Policy.id == policy_id).delete()
+    row = db.query(Policy).filter(Policy.id == policy_id, Policy.company_id == current_user.company_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    db.delete(row)
     db.commit()
     return {"status": "deleted"}
 
@@ -276,20 +444,34 @@ def demo_orders(data: OrderRequest):
 
 @app.post("/track")
 def track_event(event: TrackEvent, request: Request, db: Session = Depends(get_db)):
+    api_key = request.headers.get("x-company-key") or request.headers.get("x-api-key") or request.query_params.get("api_key")
+    company = None
+    if api_key:
+        company = db.query(Company).filter(Company.api_key == api_key).first()
+    if not company:
+        company = db.query(Company).first()
+
     client_hash = hash_ip(get_client_ip(request))
-    db.add(RequestLog(endpoint=event.endpoint, client_hash=client_hash, status="tracked", source="gtag"))
+    db.add(RequestLog(
+        endpoint=event.endpoint,
+        method="POST",
+        client_hash=client_hash,
+        status="tracked",
+        source="gtag",
+        company_id=company.id if company else None,
+    ))
     db.commit()
     return {"status": "received"}
 
 
 @app.get("/metrics/summary")
 def metrics_summary(minutes: int = 60, current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
-    return metrics.get_summary(db, minutes)
+    return metrics.get_summary(db, minutes, company_id=current_user.company_id)
 
 
 @app.get("/metrics/endpoints")
 def metrics_endpoints(minutes: int = 60, current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
-    return metrics.get_endpoint_counts(db, minutes)
+    return metrics.get_endpoint_counts(db, minutes, company_id=current_user.company_id)
 
 
 @app.get("/metrics/timeline")
@@ -300,4 +482,13 @@ def metrics_timeline(
     db: Session = Depends(get_db),
 ):
     bucket_seconds = 30 if minutes <= 15 else (60 if minutes <= 60 else 900)
-    return metrics.get_timeline(db, minutes, bucket_seconds, endpoint)
+    return metrics.get_timeline(db, minutes, bucket_seconds, endpoint, company_id=current_user.company_id)
+
+
+@app.get("/metrics/recent", response_model=list[RequestLogOut])
+def metrics_recent(
+    limit: int = 30,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    return metrics.get_recent_logs(db, limit=limit, company_id=current_user.company_id)
