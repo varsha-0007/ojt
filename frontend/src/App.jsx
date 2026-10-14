@@ -67,7 +67,7 @@ export default function App() {
         </button>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6 flex gap-3 items-end">
+      {/* <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6 flex gap-3 items-end">
         <label className="block flex-1">
           <span className="block text-xs text-gray-500 mb-1">Backend URL</span>
           <input className="input" value={backendUrlInput} onChange={(e) => setBackendUrlInput(e.target.value)} />
@@ -75,7 +75,7 @@ export default function App() {
         <button onClick={saveBackendUrl} className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-2 rounded">
           Save
         </button>
-      </div>
+      </div> */}
 
       <div className="flex gap-2 mb-6 border-b border-gray-800">
         <TabButton active={tab === "dashboard"} onClick={() => setTab("dashboard")}>

@@ -40,10 +40,10 @@
         <label>Rate Limiter Backend URL</label>
         <input id="backendUrl" value="http://localhost:8000" />
       </div>
-      <div style="flex: 3;">
+      <!-- <div style="flex: 3;">
         <label>Company API Key (Copy from Dashboard top bar to test a specific company)</label>
         <input id="apiKey" placeholder="e.g. cmp_demo_key_1234567890 (blank = default company)" />
-      </div>
+      </div> -->
     </div>
 
     <div class="row">
@@ -128,7 +128,7 @@
 
     const headers = {};
     if (body) headers["Content-Type"] = "application/json";
-    if (apiKey) headers["X-Company-Key"] = apiKey;
+    //if (apiKey) headers["X-Company-Key"] = apiKey;
 
     total++;
     try {
