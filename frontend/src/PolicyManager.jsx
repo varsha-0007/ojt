@@ -245,14 +245,14 @@ export default function PolicyManager() {
             />
           </Field>
 
-          <Field label="Forward URL (Optional)">
+          {/*<Field label="Forward URL (Optional)">
             <input
               className="input"
               placeholder="e.g. http://upstream-service:8080"
               value={activeForm.forward_url}
               onChange={(e) => updateField("forward_url", e.target.value)}
             />
-          </Field>
+          </Field>*/}
         </div>
 
         <div className="flex items-center gap-3 mt-4">

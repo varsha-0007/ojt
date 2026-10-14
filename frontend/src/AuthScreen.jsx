@@ -61,7 +61,7 @@ export default function AuthScreen({ onAuthed }) {
                 required
               />
             </label>
-            <label className="block">
+            {/*<label className="block">
               <span className="block text-xs text-gray-400 mb-1">
                 Upstream Backend / Website URL (Optional)
               </span>
@@ -75,7 +75,7 @@ export default function AuthScreen({ onAuthed }) {
               <span className="block text-xs text-gray-500 mt-1">
                 Requests passing rate checks can automatically forward to this backend.
               </span>
-            </label>
+            </label>*/}
           </>
         )}
 
