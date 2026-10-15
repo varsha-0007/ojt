@@ -5,14 +5,12 @@ from sqlalchemy.orm import Session
 from app.models import RequestLog
 
 
-def get_summary(db: Session, minutes: int = 60):
+def get_summary(db: Session, minutes: int = 60, company_id: Optional[int] = None):
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    rows = (
-        db.query(RequestLog.status, func.count())
-        .filter(RequestLog.created_at >= since)
-        .group_by(RequestLog.status)
-        .all()
-    )
+    query = db.query(RequestLog.status, func.count()).filter(RequestLog.created_at >= since)
+    if company_id:
+        query = query.filter(RequestLog.company_id == company_id)
+    rows = query.group_by(RequestLog.status).all()
     counts = {"allowed": 0, "rejected": 0, "tracked": 0}
     for status, count in rows:
         counts[status] = count
@@ -20,21 +18,20 @@ def get_summary(db: Session, minutes: int = 60):
     return {"total": total, **counts}
 
 
-def get_endpoint_counts(db: Session, minutes: int = 60):
+def get_endpoint_counts(db: Session, minutes: int = 60, company_id: Optional[int] = None):
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    rows = (
-        db.query(RequestLog.endpoint, func.count().label("total"))
-        .filter(RequestLog.created_at >= since)
-        .group_by(RequestLog.endpoint)
-        .order_by(func.count().desc())
-        .all()
-    )
+    query = db.query(RequestLog.endpoint, func.count().label("total")).filter(RequestLog.created_at >= since)
+    if company_id:
+        query = query.filter(RequestLog.company_id == company_id)
+    rows = query.group_by(RequestLog.endpoint).order_by(func.count().desc()).all()
     return [{"endpoint": endpoint, "total": total} for endpoint, total in rows]
 
 
-def get_timeline(db: Session, minutes: int = 30, bucket_seconds: int = 60, endpoint: Optional[str] = None):
+def get_timeline(db: Session, minutes: int = 30, bucket_seconds: int = 60, endpoint: Optional[str] = None, company_id: Optional[int] = None):
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     query = db.query(RequestLog.created_at, RequestLog.status).filter(RequestLog.created_at >= since)
+    if company_id:
+        query = query.filter(RequestLog.company_id == company_id)
     if endpoint:
         query = query.filter(RequestLog.endpoint == endpoint)
     rows = query.order_by(RequestLog.created_at.asc()).all()
@@ -57,3 +54,10 @@ def get_timeline(db: Session, minutes: int = 30, bucket_seconds: int = 60, endpo
                 buckets[index]["rejected"] += 1
 
     return buckets
+
+
+def get_recent_logs(db: Session, limit: int = 30, company_id: Optional[int] = None):
+    query = db.query(RequestLog)
+    if company_id:
+        query = query.filter(RequestLog.company_id == company_id)
+    return query.order_by(RequestLog.created_at.desc()).limit(limit).all()
