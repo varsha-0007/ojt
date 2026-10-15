@@ -3,6 +3,7 @@ import { apiGet } from "./api.js";
 
 export default function Dashboard() {
   const [summary, setSummary] = useState(null);
+  const [policies, setPolicies] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [selectedEndpoint, setSelectedEndpoint] = useState("");
@@ -12,14 +13,16 @@ export default function Dashboard() {
 
   async function loadAll() {
     try {
-      const [s, eps, tl] = await Promise.all([
+      const [s, eps, tl, pols] = await Promise.all([
         apiGet(`/metrics/summary?minutes=${minutes}`),
         apiGet(`/metrics/endpoints?minutes=${minutes}`),
         apiGet(`/metrics/timeline?minutes=${minutes}${selectedEndpoint ? `&endpoint=${encodeURIComponent(selectedEndpoint)}` : ""}`),
+        apiGet("/policies").catch(() => []),
       ]);
       setSummary(s);
       setEndpoints(eps);
       setTimeline(tl);
+      setPolicies(pols || []);
       setError("");
     } catch (err) {
       setError("Could not reach backend. Check the Backend URL in Settings.");
@@ -67,11 +70,16 @@ export default function Dashboard() {
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-300">Traffic Over Time (Spike Graph)</h2>
-          <select className="input w-48" value={selectedEndpoint} onChange={(e) => setSelectedEndpoint(e.target.value)}>
+          <select className="input w-56 text-sm" value={selectedEndpoint} onChange={(e) => setSelectedEndpoint(e.target.value)}>
             <option value="">All Endpoints</option>
-            {endpoints.map((ep) => (
-              <option key={ep.endpoint} value={ep.endpoint}>{ep.endpoint}</option>
+            {policies.map((p) => (
+              <option key={p.id} value={p.endpoint}>{p.endpoint} ({p.name})</option>
             ))}
+            {endpoints
+              .filter((ep) => !policies.some((p) => p.endpoint === ep.endpoint))
+              .map((ep) => (
+                <option key={ep.endpoint} value={ep.endpoint}>{ep.endpoint}</option>
+              ))}
           </select>
         </div>
         <canvas ref={canvasRef} width={900} height={240} className="w-full bg-gray-950 rounded" />
@@ -135,10 +143,10 @@ function drawChart(canvas, buckets) {
     const x = i * barWidth;
 
     ctx.fillStyle = "#3b82f6";
-    ctx.fillRect(x, chartHeight - barHeight, barWidth - 1, barHeight);
+    ctx.fillRect(x, chartHeight - barHeight, Math.max(1, barWidth - 1), barHeight);
 
     ctx.fillStyle = "#ef4444";
-    ctx.fillRect(x, chartHeight - rejectedHeight, barWidth - 1, rejectedHeight);
+    ctx.fillRect(x, chartHeight - rejectedHeight, Math.max(1, barWidth - 1), rejectedHeight);
   });
 
   ctx.fillStyle = "#9ca3af";

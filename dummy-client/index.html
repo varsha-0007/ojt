@@ -123,12 +123,13 @@
     const backendUrl = document.getElementById("backendUrl").value.replace(/\/$/, "");
     const endpoint = document.getElementById("endpointInput").value.trim() || "/demo/books";
     const method = document.getElementById("method").value;
-    const apiKey = document.getElementById("apiKey").value.trim();
+    const apiKeyEl = document.getElementById("apiKey");
+    const apiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
     const body = getBody(endpoint, method);
 
     const headers = {};
     if (body) headers["Content-Type"] = "application/json";
-    //if (apiKey) headers["X-Company-Key"] = apiKey;
+    if (apiKey) headers["X-Company-Key"] = apiKey;
 
     total++;
     try {
