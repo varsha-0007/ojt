@@ -31,9 +31,12 @@ return allowed
 """
 
 
-def is_allowed(redis_conn, policy_id, client_hash, capacity, refill_tokens, refill_seconds):
+def is_allowed(redis_conn, policy_id, client_hash, capacity, refill_tokens, refill_seconds, company_id=None):
     key = f"bucket:{policy_id}:{client_hash}"
     refill_rate = refill_tokens / refill_seconds
     now = time.time()
-    result = redis_conn.eval(LUA_SCRIPT, 1, key, capacity, refill_rate, now)
-    return result == 1
+    try:
+        result = redis_conn.eval(LUA_SCRIPT, 1, key, capacity, refill_rate, now)
+        return result == 1
+    except Exception:
+        return True
