@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { login, signup } from "./api.js";
+import { login, signup, setBackendUrl } from "./api.js";
 
 export default function AuthScreen({ onAuthed }) {
   const [mode, setMode] = useState("login"); // "login" | "signup"
   const [companyName, setCompanyName] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
+  const [backendUrl, setBackendUrlState] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -15,10 +16,13 @@ export default function AuthScreen({ onAuthed }) {
     setError("");
     setLoading(true);
     try {
-      const user =
-        mode === "login"
-          ? await login(email, password)
-          : await signup(companyName, targetUrl, email, password);
+      let user;
+      if (mode === "login") {
+        user = await login(email, password);
+      } else {
+        if (backendUrl) setBackendUrl(backendUrl);
+        user = await signup(companyName, targetUrl, email, password);
+      }
       onAuthed(user);
     } catch (err) {
       setError(err.message);
@@ -61,21 +65,20 @@ export default function AuthScreen({ onAuthed }) {
                 required
               />
             </label>
-            {/*<label className="block">
-              <span className="block text-xs text-gray-400 mb-1">
-                Upstream Backend / Website URL (Optional)
-              </span>
+            <label className="block">
+              <span className="block text-xs text-gray-400 mb-1">Backend URL *</span>
               <input
                 className="input"
                 type="text"
-                placeholder="e.g. https://api.mycompany.com or http://localhost:3000"
-                value={targetUrl}
-                onChange={(e) => setTargetUrl(e.target.value)}
+                placeholder="e.g. http://localhost:8000"
+                value={backendUrl}
+                onChange={(e) => setBackendUrlState(e.target.value)}
+                required
               />
               <span className="block text-xs text-gray-500 mt-1">
-                Requests passing rate checks can automatically forward to this backend.
+                The URL where your rate-limiter backend is running.
               </span>
-            </label>*/}
+            </label>
           </>
         )}
 
