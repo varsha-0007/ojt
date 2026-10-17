@@ -11,6 +11,8 @@ const emptyForm = {
   forward_url: "",
 };
 
+const isLoginEndpoint = (endpoint) => endpoint.replace(/\/$/, "") === "/demo/login";
+
 export default function PolicyManager() {
   const [policies, setPolicies] = useState([]);
   const [form, setForm] = useState(emptyForm);
@@ -33,10 +35,13 @@ export default function PolicyManager() {
   }, []);
 
   function updateField(field, value) {
+    const updates = field === "endpoint" && isLoginEndpoint(value.trim())
+      ? { endpoint: value, method: "POST" }
+      : { [field]: value };
     if (editingPolicy) {
-      setEditingPolicy((f) => ({ ...f, [field]: value }));
+      setEditingPolicy((f) => ({ ...f, ...updates }));
     } else {
-      setForm((f) => ({ ...f, [field]: value }));
+      setForm((f) => ({ ...f, ...updates }));
     }
   }
 
@@ -79,7 +84,7 @@ export default function PolicyManager() {
       id: policy.id,
       name: policy.name,
       endpoint: policy.endpoint, // Locked / Immutable
-      method: policy.method,
+      method: isLoginEndpoint(policy.endpoint) ? "POST" : policy.method,
       capacity: policy.capacity,
       refill_tokens: policy.refill_tokens,
       refill_seconds: policy.refill_seconds,
@@ -198,11 +203,15 @@ export default function PolicyManager() {
             />
           </Field>
 
-          <Field label="HTTP Method">
+          <Field
+            label="HTTP Method"
+            tooltip={isLoginEndpoint(activeForm.endpoint) ? "The /demo/login endpoint only supports POST." : null}
+          >
             <select
               className="input"
               value={activeForm.method}
               onChange={(e) => updateField("method", e.target.value)}
+              disabled={isLoginEndpoint(activeForm.endpoint)}
             >
               <option value="*">Any (*)</option>
               <option value="GET">GET</option>
