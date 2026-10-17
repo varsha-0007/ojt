@@ -22,6 +22,7 @@
   #log { background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 10px; height: 260px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
   .ok { color: #4ade80; }
   .fail { color: #f87171; }
+  .warning { color: #facc15; }
   .info { color: #60a5fa; }
   .stats { display: flex; gap: 14px; margin-bottom: 12px; }
   .stat { flex: 1; background: #09090b; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid #27272a; }
@@ -40,10 +41,10 @@
         <label>Rate Limiter Backend URL</label>
         <input id="backendUrl" value="http://localhost:8000" />
       </div>
-      <!-- <div style="flex: 3;">
-        <label>Company API Key (Copy from Dashboard top bar to test a specific company)</label>
-        <input id="apiKey" placeholder="e.g. cmp_demo_key_1234567890 (blank = default company)" />
-      </div> -->
+      <div style="flex: 3;">
+        <label>Company API Key (required; copy from your dashboard)</label>
+        <input id="apiKey" type="password" placeholder="Paste the Simulator API key shown on your dashboard" />
+      </div>
     </div>
 
     <div class="row">
@@ -75,6 +76,7 @@
         </select>
       </div>
     </div>
+    <div id="policySyncStatus" class="subtitle">Enter the company API key to sync enabled policies and their methods.</div>
   </div>
 
   <div class="box">
@@ -90,19 +92,22 @@
       <div class="stat"><div class="num" id="totalNum">0</div>Total Sent</div>
       <div class="stat"><div class="num ok" id="okNum">0</div>Allowed (200)</div>
       <div class="stat"><div class="num fail" id="failNum">0</div>Rejected (429)</div>
+      <div class="stat"><div class="num warning" id="errorNum">0</div>Errors / Timeouts</div>
     </div>
     <div id="log"></div>
   </div>
 
 <script>
-  let total = 0, ok = 0, fail = 0;
+  let total = 0, ok = 0, fail = 0, errors = 0;
+  let simulatorPolicies = [];
+  let isSyncingPolicies = false;
 
-  function log(msg, cls) {
-    const box = document.getElementById("log");
+  function log(msg, cls, timestamp = new Date(), parent = document.getElementById("log")) {
     const line = document.createElement("div");
     if (cls) line.className = cls;
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    box.appendChild(line);
+    line.textContent = `[${timestamp.toLocaleTimeString()}] ${msg}`;
+    parent.appendChild(line);
+    const box = document.getElementById("log");
     box.scrollTop = box.scrollHeight;
   }
 
@@ -110,6 +115,55 @@
     document.getElementById("totalNum").textContent = total;
     document.getElementById("okNum").textContent = ok;
     document.getElementById("failNum").textContent = fail;
+    document.getElementById("errorNum").textContent = errors;
+  }
+
+  function syncMethodForEndpoint() {
+    const endpoint = document.getElementById("endpointInput").value.trim();
+    const methodInput = document.getElementById("method");
+    if (endpoint.replace(/\/$/, "") === "/demo/login") {
+      methodInput.value = "POST";
+      methodInput.disabled = true;
+      return;
+    }
+    methodInput.disabled = false;
+    const policy =
+      simulatorPolicies.find((item) => item.endpoint === endpoint && item.method !== "*") ||
+      simulatorPolicies.find(
+        (item) => item.endpoint.endsWith("*") && endpoint.startsWith(item.endpoint.slice(0, -1)) && item.method !== "*",
+      );
+    if (policy) document.getElementById("method").value = policy.method;
+  }
+
+  async function refreshSimulatorPolicies() {
+    if (isSyncingPolicies) return;
+    const backendUrl = document.getElementById("backendUrl").value.trim().replace(/\/$/, "");
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const status = document.getElementById("policySyncStatus");
+    if (!backendUrl || !apiKey) {
+      simulatorPolicies = [];
+      status.textContent = "Enter the company API key to sync enabled policies and their methods.";
+      return;
+    }
+
+    isSyncingPolicies = true;
+    try {
+      const response = await fetch(`${backendUrl}/simulator/policies`, {
+        headers: { "X-Company-Key": apiKey },
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || `Request failed (${response.status})`);
+      }
+      simulatorPolicies = await response.json();
+      syncMethodForEndpoint();
+      status.textContent = `Synced ${simulatorPolicies.length} enabled policies. Matching endpoint methods update automatically.`;
+    } catch (err) {
+      simulatorPolicies = [];
+      status.textContent = `Policy sync failed: ${err.message}`;
+    } finally {
+      isSyncingPolicies = false;
+    }
   }
 
   function getBody(endpoint, method) {
@@ -119,82 +173,117 @@
     return { test: true, timestamp: Date.now() };
   }
 
-  async function executeSingleRequest() {
-    const backendUrl = document.getElementById("backendUrl").value.replace(/\/$/, "");
-    const endpoint = document.getElementById("endpointInput").value.trim() || "/demo/books";
-    const method = document.getElementById("method").value;
-    const apiKeyEl = document.getElementById("apiKey");
-    const apiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
+  function completeRequest(result, deferLog, logTarget) {
+    if (result.type === "allowed") ok++;
+    else if (result.type === "rejected") fail++;
+    else errors++;
+    updateStats();
+    if (!deferLog) log(result.message, result.className, new Date(), logTarget);
+    return result;
+  }
+
+  async function executeSingleRequest({ backendUrl, endpoint, method, apiKey, deferLog = false, logTarget } = {}) {
+    backendUrl = backendUrl || document.getElementById("backendUrl").value.replace(/\/$/, "");
+    endpoint = endpoint || document.getElementById("endpointInput").value.trim() || "/demo/books";
+    method = method || document.getElementById("method").value;
+    if (apiKey === undefined) {
+      apiKey = document.getElementById("apiKey").value.trim();
+    }
     const body = getBody(endpoint, method);
+
+    if (!apiKey) {
+      return completeRequest({
+        message: "Enter your company API key from the dashboard to send requests for that company.",
+        className: "warning",
+        type: "error",
+      }, deferLog, logTarget);
+    }
 
     const headers = {};
     if (body) headers["Content-Type"] = "application/json";
-    if (apiKey) headers["X-Company-Key"] = apiKey;
+    headers["X-Company-Key"] = apiKey;
 
     total++;
+    updateStats();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
       const res = await fetch(backendUrl + endpoint, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
       });
 
       if (res.status === 429) {
-        fail++;
         const data = await res.json().catch(() => ({}));
         const policyName = data.policy ? ` (${data.policy})` : "";
-        log(`${method} ${endpoint} -> 429 Too Many Requests${policyName}`, "fail");
-      } else {
-        ok++;
-        log(`${method} ${endpoint} -> ${res.status} OK`, "ok");
+        return completeRequest({
+          message: `${method} ${endpoint} -> 429 Too Many Requests${policyName}`,
+          className: "fail",
+          type: "rejected",
+        }, deferLog, logTarget);
       }
+      if (res.ok) {
+        return completeRequest({
+          message: `${method} ${endpoint} -> ${res.status} OK`,
+          className: "ok",
+          type: "allowed",
+        }, deferLog, logTarget);
+      }
+
+      const data = await res.json().catch(() => ({}));
+      return completeRequest({
+        message: `${method} ${endpoint} -> ${res.status} ${data.detail || res.statusText}`,
+        className: "warning",
+        type: "error",
+      }, deferLog, logTarget);
     } catch (err) {
-      fail++;
-      log(`${method} ${endpoint} -> Network Error: ${err.message}`, "fail");
+      const message = err.name === "AbortError"
+        ? `${method} ${endpoint} -> Request timed out after 10 seconds`
+        : `${method} ${endpoint} -> Network Error: ${err.message}`;
+      return completeRequest({ message, className: "warning", type: "error" }, deferLog, logTarget);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   async function sendOne() {
     await executeSingleRequest();
-    updateStats();
   }
 
-  // True Simultaneous Concurrent Burst: Uses Promise.all with zero artificial delay
-  // This guarantees all N requests hit the rate limiter at the exact same millisecond
-  async function sendTrueBurst() {
+  // Launch every request in the burst concurrently without adding delays.
+  function sendTrueBurst() {
     const count = parseInt(document.getElementById("burstCount").value, 10) || 10;
     const endpoint = document.getElementById("endpointInput").value.trim() || "/demo/books";
-    const btnBurst = document.getElementById("btnBurst");
-    const btnSingle = document.getElementById("btnSingle");
+    const method = document.getElementById("method").value;
+    const backendUrl = document.getElementById("backendUrl").value.replace(/\/$/, "");
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const timestamp = new Date();
+    const group = document.createElement("div");
+    document.getElementById("log").appendChild(group);
 
-    btnBurst.disabled = true;
-    btnSingle.disabled = true;
+    const requests = Array.from({ length: count }, () =>
+      executeSingleRequest({ backendUrl, endpoint, method, apiKey, deferLog: true })
+    );
+    log(`>>> Firing ${count} simultaneous requests concurrently at ${endpoint} ...`, "info", timestamp, group);
 
-    log(`>>> Firing ${count} simultaneous requests concurrently at ${endpoint} ...`, "info");
-
-    const requests = Array.from({ length: count }, () => executeSingleRequest());
-    await Promise.all(requests);
-
-    updateStats();
-    btnBurst.disabled = false;
-    btnSingle.disabled = false;
+    requests.forEach((request) => {
+      void request.then((result) => log(result.message, result.className, timestamp, group));
+    });
   }
 
   function clearLog() {
     document.getElementById("log").innerHTML = "";
-    total = ok = fail = 0;
+    total = ok = fail = errors = 0;
     updateStats();
   }
 
-  // Auto-adjust method when picking standard endpoints
-  document.getElementById("endpointInput").addEventListener("input", function(e) {
-    const val = e.target.value;
-    if (val === "/demo/login" || val === "/demo/orders") {
-      document.getElementById("method").value = "POST";
-    } else if (val === "/demo/books") {
-      document.getElementById("method").value = "GET";
-    }
-  });
+  document.getElementById("endpointInput").addEventListener("input", syncMethodForEndpoint);
+  document.getElementById("apiKey").addEventListener("change", refreshSimulatorPolicies);
+  document.getElementById("backendUrl").addEventListener("change", refreshSimulatorPolicies);
+  refreshSimulatorPolicies();
+  setInterval(refreshSimulatorPolicies, 2000);
 </script>
 </body>
 </html>
