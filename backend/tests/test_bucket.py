@@ -2,6 +2,7 @@ import time
 import threading
 import pytest
 import fakeredis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app import bucket
 
@@ -43,6 +44,21 @@ def test_bucket_refills_over_time(redis_conn):
     assert bucket.is_allowed(redis_conn, 1, "clientE", capacity=5, refill_tokens=5, refill_seconds=1) is True
 
 
+def test_bucket_refills_only_at_configured_interval(redis_conn, monkeypatch):
+    current_time = [100.0]
+    monkeypatch.setattr(bucket.time, "time", lambda: current_time[0])
+
+    assert bucket.is_allowed(redis_conn, 1, "interval-client", 2, 1, 10) is True
+    assert bucket.is_allowed(redis_conn, 1, "interval-client", 2, 1, 10) is True
+    assert bucket.is_allowed(redis_conn, 1, "interval-client", 2, 1, 10) is False
+
+    current_time[0] = 109.9
+    assert bucket.is_allowed(redis_conn, 1, "interval-client", 2, 1, 10) is False
+
+    current_time[0] = 110.0
+    assert bucket.is_allowed(redis_conn, 1, "interval-client", 2, 1, 10) is True
+
+
 def test_concurrent_requests_never_exceed_capacity(redis_conn):
     """Fires 50 requests at the exact same time from 50 threads,
     against a bucket with capacity 10. Proves the Lua script prevents
@@ -64,3 +80,24 @@ def test_concurrent_requests_never_exceed_capacity(redis_conn):
 
     allowed_count = sum(1 for r in results if r is True)
     assert allowed_count == capacity, f"expected exactly {capacity} allowed, got {allowed_count}"
+
+
+def test_redis_failure_uses_rate_limited_memory_fallback():
+    class UnavailableRedis:
+        def eval(self, *args):
+            raise RedisConnectionError("Redis unavailable")
+
+    results = [
+        bucket.is_allowed(
+            UnavailableRedis(),
+            1,
+            "fallback-client",
+            capacity=5,
+            refill_tokens=0,
+            refill_seconds=60,
+            company_id=999,
+        )
+        for _ in range(10)
+    ]
+
+    assert results == [True] * 5 + [False] * 5
