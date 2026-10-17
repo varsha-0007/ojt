@@ -1,6 +1,6 @@
 databases:
   - name: rate-limiter-db
-    databaseName: rate_limiter
+    databaseName: rate_limit_control_plane
     plan: free
 
 services:

@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: rate_limiter
+      POSTGRES_DB: rate_limit_control_plane
     ports:
       - "5432:5432"
     volumes:
@@ -33,7 +33,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rate_limiter
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rate_limit_control_plane
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: change-this-secret-in-production
     ports:
