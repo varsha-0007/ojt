@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/rate_limit_control_plane",
+    "postgresql://postgres:postgres@localhost:5432/rate_limiter",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
