@@ -40,6 +40,30 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def record_request(
+    db: Session,
+    request: Request,
+    status: str,
+    source: str,
+    company_id: Optional[int],
+    policy_name: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    method: Optional[str] = None,
+    client_hash: Optional[str] = None,
+) -> None:
+    db.add(
+        RequestLog(
+            endpoint=endpoint if endpoint is not None else request.url.path,
+            method=method if method is not None else request.method,
+            client_hash=client_hash if client_hash is not None else hash_ip(get_client_ip(request)),
+            status=status,
+            source=source,
+            company_id=company_id,
+            policy_name=policy_name,
+        )
+    )
+
+
 def user_to_out(user: User) -> UserOut:
     company = user.company
     return UserOut(
@@ -49,7 +73,7 @@ def user_to_out(user: User) -> UserOut:
         is_primary=user.is_primary,
         company_id=user.company_id,
         company_name=company.name if company else None,
-        company_api_key=company.api_key if company else None,
+        company_api_key=company.api_key if company and user.role == "owner" else None,
         company_target_url=company.target_url if company else None,
         created_at=user.created_at,
     )
@@ -74,7 +98,16 @@ def find_policy_for_request(db: Session, path: str, method: str, company_id: Opt
     return exact_match or wildcard_match
 
 
-SKIP_PATHS = ("/auth", "/policies", "/metrics", "/health", "/docs", "/openapi.json", "/track")
+SKIP_PATHS = (
+    "/auth",
+    "/policies",
+    "/metrics",
+    "/health",
+    "/docs",
+    "/openapi.json",
+    "/track",
+    "/simulator/policies",
+)
 
 
 @app.middleware("http")
@@ -89,14 +122,35 @@ async def rate_limit_middleware(request: Request, call_next):
         company = None
         if api_key:
             company = db.query(Company).filter(Company.api_key == api_key).first()
+            if not company:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid company API key"},
+                )
+        elif path.startswith("/demo/"):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "A valid X-Company-Key header is required"},
+            )
         if not company:
             company = db.query(Company).first()
         company_id = company.id if company else None
 
+        if path == "/demo/login" and request.method != "POST":
+            return JSONResponse(
+                status_code=405,
+                content={"detail": "The /demo/login endpoint only supports POST"},
+                headers={"Allow": "POST"},
+            )
+
         policy = find_policy_for_request(db, path, request.method, company_id=company_id)
         if policy is None:
-            return await call_next(request)
+            response = await call_next(request)
+            record_request(db, request, "allowed", "proxy", company_id)
+            db.commit()
+            return response
 
+        request.state.rate_limit_policy = policy
         client_hash = hash_ip(get_client_ip(request))
         allowed = bucket.is_allowed(
             redis_conn, policy.id, client_hash,
@@ -105,15 +159,10 @@ async def rate_limit_middleware(request: Request, call_next):
         )
 
         if not allowed:
-            db.add(RequestLog(
-                endpoint=path,
-                method=request.method,
-                client_hash=client_hash,
-                status="rejected",
-                source="proxy",
-                company_id=company_id,
-                policy_name=policy.name,
-            ))
+            record_request(
+                db, request, "rejected", "proxy", company_id,
+                policy_name=policy.name, client_hash=client_hash,
+            )
             db.commit()
             return JSONResponse(
                 status_code=429,
@@ -132,15 +181,10 @@ async def rate_limit_middleware(request: Request, call_next):
         else:
             response = await call_next(request)
 
-        db.add(RequestLog(
-            endpoint=path,
-            method=request.method,
-            client_hash=client_hash,
-            status="allowed",
-            source="proxy",
-            company_id=company_id,
-            policy_name=policy.name,
-        ))
+        record_request(
+            db, request, "allowed", "proxy", company_id,
+            policy_name=policy.name, client_hash=client_hash,
+        )
         db.commit()
         return response
     finally:
@@ -269,14 +313,29 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=TokenResponse)
-def login(data: LoginCredentials, db: Session = Depends(get_db)):
+def login(data: LoginCredentials, request: Request, db: Session = Depends(get_db)):
     email = normalize_email(data.email)
     user = db.query(User).filter(User.email == email).first()
     if not user or not auth.verify_password(data.password, user.password_hash):
+        record_request(db, request, "rejected", "auth", user.company_id if user else None)
+        db.commit()
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
+    record_request(db, request, "allowed", "auth", user.company_id)
+    db.commit()
     token = auth.create_access_token(user.id, user.email, user.role, company_id=user.company_id)
     return {"access_token": token, "user": user_to_out(user)}
+
+
+@app.post("/auth/logout")
+def logout(
+    request: Request,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    record_request(db, request, "allowed", "auth", current_user.company_id)
+    db.commit()
+    return {"status": "logged_out"}
 
 
 @app.get("/auth/me", response_model=UserOut)
@@ -340,6 +399,9 @@ def delete_user(user_id: int, current_user: User = Depends(auth.require_owner), 
 
 @app.post("/policies", response_model=PolicyOut)
 def create_policy(policy: PolicyCreate, current_user: User = Depends(auth.require_owner), db: Session = Depends(get_db)):
+    if policy.endpoint.rstrip("/") == "/demo/login" and policy.method != "POST":
+        raise HTTPException(status_code=400, detail="The /demo/login endpoint only supports POST")
+
     # Duplicate prevention: Check if same endpoint + method already exists in this company
     existing = db.query(Policy).filter(
         Policy.company_id == current_user.company_id,
@@ -380,6 +442,8 @@ def update_policy(
     row = db.query(Policy).filter(Policy.id == policy_id, Policy.company_id == current_user.company_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Policy not found")
+    if row.endpoint.rstrip("/") == "/demo/login" and policy_data.method != "POST":
+        raise HTTPException(status_code=400, detail="The /demo/login endpoint only supports POST")
 
     # Update attributes while preserving the immutable endpoint path
     row.name = policy_data.name
@@ -451,15 +515,15 @@ def track_event(event: TrackEvent, request: Request, db: Session = Depends(get_d
     if not company:
         company = db.query(Company).first()
 
-    client_hash = hash_ip(get_client_ip(request))
-    db.add(RequestLog(
+    record_request(
+        db,
+        request,
+        "tracked",
+        "gtag",
+        company.id if company else None,
         endpoint=event.endpoint,
         method="POST",
-        client_hash=client_hash,
-        status="tracked",
-        source="gtag",
-        company_id=company.id if company else None,
-    ))
+    )
     db.commit()
     return {"status": "received"}
 
@@ -492,3 +556,35 @@ def metrics_recent(
     db: Session = Depends(get_db),
 ):
     return metrics.get_recent_logs(db, limit=limit, company_id=current_user.company_id)
+
+
+@app.get("/simulator/policies", response_model=list[PolicyOut])
+def simulator_policies(request: Request, db: Session = Depends(get_db)):
+    api_key = request.headers.get("x-company-key") or request.headers.get("x-api-key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="A valid company API key is required")
+
+    company = db.query(Company).filter(Company.api_key == api_key).first()
+    if not company:
+        raise HTTPException(status_code=401, detail="Invalid company API key")
+
+    return (
+        db.query(Policy)
+        .filter(Policy.company_id == company.id, Policy.enabled == True)  # noqa: E712
+        .order_by(Policy.created_at.desc())
+        .all()
+    )
+
+
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+async def configured_endpoint_fallback(path: str, request: Request):
+    if not getattr(request.state, "rate_limit_policy", None):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {
+        "status": "success",
+        "endpoint": f"/{path}",
+        "method": request.method,
+    }
