@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { login, signup } from "./api.js";
 
-export default function AuthScreen({ onAuthed }) {
+export default function AuthScreen({ onAuthed, notice = "" }) {
   const [mode, setMode] = useState("login"); // "login" | "signup"
   const [companyName, setCompanyName] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
@@ -46,6 +46,11 @@ export default function AuthScreen({ onAuthed }) {
           {error}
         </div>
       )}
+      {notice && (
+        <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-200 text-sm px-3 py-2 rounded mb-4">
+          {notice}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {mode === "signup" && (
@@ -61,13 +66,13 @@ export default function AuthScreen({ onAuthed }) {
                 required
               />
             </label>
-            {/*<label className="block">
+            <label className="block">
               <span className="block text-xs text-gray-400 mb-1">
                 Upstream Backend / Website URL (Optional)
               </span>
               <input
                 className="input"
-                type="text"
+                type="url"
                 placeholder="e.g. https://api.mycompany.com or http://localhost:3000"
                 value={targetUrl}
                 onChange={(e) => setTargetUrl(e.target.value)}
@@ -75,7 +80,7 @@ export default function AuthScreen({ onAuthed }) {
               <span className="block text-xs text-gray-500 mt-1">
                 Requests passing rate checks can automatically forward to this backend.
               </span>
-            </label>*/}
+            </label>
           </>
         )}
 

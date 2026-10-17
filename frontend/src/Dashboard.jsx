@@ -9,6 +9,7 @@ export default function Dashboard() {
   const [selectedEndpoint, setSelectedEndpoint] = useState("");
   const [minutes, setMinutes] = useState(60);
   const [error, setError] = useState("");
+  const [hoveredBucket, setHoveredBucket] = useState(null);
   const canvasRef = useRef(null);
 
   async function loadAll() {
@@ -25,13 +26,13 @@ export default function Dashboard() {
       setPolicies(pols || []);
       setError("");
     } catch (err) {
-      setError("Could not reach backend. Check the Backend URL in Settings.");
+      setError(`Could not load dashboard data: ${err.message}`);
     }
   }
 
   useEffect(() => {
     loadAll();
-    const id = setInterval(loadAll, 3000);
+    const id = setInterval(loadAll, 1500);
     return () => clearInterval(id);
   }, [minutes, selectedEndpoint]);
 
@@ -39,8 +40,22 @@ export default function Dashboard() {
     drawChart(canvasRef.current, timeline);
   }, [timeline]);
 
-  const mostHit = [...endpoints].sort((a, b) => b.total - a.total).slice(0, 5);
-  const leastHit = [...endpoints].sort((a, b) => a.total - b.total).slice(0, 5);
+  const mostHit = [...endpoints].sort((a, b) => b.total - a.total);
+  const leastHit = [...endpoints].sort((a, b) => a.total - b.total);
+
+  function handleChartMouseMove(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const index = Math.min(timeline.length - 1, Math.floor((x / rect.width) * timeline.length));
+    if (index < 0 || !timeline[index]) {
+      setHoveredBucket(null);
+      return;
+    }
+    setHoveredBucket({
+      bucket: timeline[index],
+      left: Math.min(Math.max((x / rect.width) * 100, 12), 88),
+    });
+  }
 
   return (
     <div>
@@ -51,7 +66,7 @@ export default function Dashboard() {
       )}
 
       <div className="flex items-center justify-between mb-4">
-        <span className="text-xs text-gray-500">Refreshes every 3 seconds</span>
+        <span className="text-xs text-gray-500">Refreshes every 1.5 seconds</span>
         <select className="input w-40" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
           <option value={15}>Last 15 min</option>
           <option value={60}>Last 1 hour</option>
@@ -82,7 +97,61 @@ export default function Dashboard() {
               ))}
           </select>
         </div>
-        <canvas ref={canvasRef} width={900} height={240} className="w-full bg-gray-950 rounded" />
+        <div className="relative">
+          <canvas
+            ref={canvasRef}
+            width={900}
+            height={240}
+            className="w-full bg-gray-950 rounded cursor-crosshair"
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={() => setHoveredBucket(null)}
+          />
+          {hoveredBucket && (
+            <div
+              className="absolute z-10 top-2 min-w-48 max-w-72 rounded border border-gray-700 bg-gray-900/95 p-3 text-xs shadow-lg pointer-events-none"
+              style={{ left: `${hoveredBucket.left}%`, transform: "translateX(-50%)" }}
+            >
+              <div className="font-semibold text-gray-100 mb-2">
+                {new Date(hoveredBucket.bucket.time * 1000).toLocaleString()}
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-300">Total</span>
+                <span>{hoveredBucket.bucket.total}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-blue-400">Allowed</span>
+                <span>{hoveredBucket.bucket.allowed}</span>
+              </div>
+              <div className="flex justify-between gap-4 mb-2">
+                <span className="text-red-400">Rejected</span>
+                <span>{hoveredBucket.bucket.rejected}</span>
+              </div>
+              <div className="border-t border-gray-700 pt-2 font-medium text-gray-300">APIs hit</div>
+              {(hoveredBucket.bucket.endpoints || []).length > 0 ? (
+                <>
+                  {(hoveredBucket.bucket.endpoints || []).slice(0, 5).map((item) => {
+                    const apiLabel = `${item.method || "API"} ${item.endpoint}`;
+                    return (
+                      <div key={apiLabel} className="mt-1">
+                        <div className="truncate text-gray-200" title={apiLabel}>{apiLabel}</div>
+                        <div className="text-gray-400">
+                          {item.total} total · {item.allowed} allowed · {item.rejected} rejected
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {(hoveredBucket.bucket.endpoints || []).length > 5 && (
+                    <div className="mt-1 text-gray-500">
+                      +{hoveredBucket.bucket.endpoints.length - 5} more APIs
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="mt-1 text-gray-500">No API requests in this time bucket.</div>
+              )}
+            </div>
+          )}
+        </div>
         <p className="text-xs text-gray-500 mt-2">
           Blue = allowed requests, Red = rejected requests. Pick a specific API above to see exactly
           when it spiked and when it was quiet.
@@ -112,15 +181,17 @@ function BarBox({ title, rows }) {
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
       <h2 className="text-sm font-semibold mb-3 text-gray-300">{title}</h2>
       {rows.length === 0 && <p className="text-gray-500 text-sm">No traffic yet.</p>}
-      {rows.map((r) => (
-        <div key={r.endpoint} className="flex items-center gap-2 mb-2 text-sm">
-          <div className="w-32 truncate text-gray-300">{r.endpoint}</div>
-          <div className="flex-1 bg-gray-950 rounded h-3">
-            <div className="bg-blue-600 h-3 rounded" style={{ width: `${(r.total / max) * 100}%` }} />
+      <div className="max-h-64 overflow-y-auto pr-2">
+        {rows.map((r) => (
+          <div key={r.endpoint} className="flex items-center gap-2 mb-2 text-sm">
+            <div className="w-32 truncate text-gray-300" title={r.endpoint}>{r.endpoint}</div>
+            <div className="flex-1 bg-gray-950 rounded h-3">
+              <div className="bg-blue-600 h-3 rounded" style={{ width: `${(r.total / max) * 100}%` }} />
+            </div>
+            <div className="w-8 text-right text-gray-500">{r.total}</div>
           </div>
-          <div className="w-8 text-right text-gray-500">{r.total}</div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -138,15 +209,20 @@ function drawChart(canvas, buckets) {
   const chartHeight = canvas.height - labelSpace;
 
   buckets.forEach((b, i) => {
-    const barHeight = (b.total / maxTotal) * (chartHeight - 10);
+    const allowedHeight = ((b.total - b.rejected) / maxTotal) * (chartHeight - 10);
     const rejectedHeight = (b.rejected / maxTotal) * (chartHeight - 10);
     const x = i * barWidth;
 
     ctx.fillStyle = "#3b82f6";
-    ctx.fillRect(x, chartHeight - barHeight, Math.max(1, barWidth - 1), barHeight);
+    ctx.fillRect(x, chartHeight - allowedHeight, Math.max(1, barWidth - 1), allowedHeight);
 
     ctx.fillStyle = "#ef4444";
-    ctx.fillRect(x, chartHeight - rejectedHeight, Math.max(1, barWidth - 1), rejectedHeight);
+    ctx.fillRect(
+      x,
+      chartHeight - allowedHeight - rejectedHeight,
+      Math.max(1, barWidth - 1),
+      rejectedHeight,
+    );
   });
 
   ctx.fillStyle = "#9ca3af";

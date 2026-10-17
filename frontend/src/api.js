@@ -15,7 +15,7 @@ export function getToken() {
 export function setToken(token) {
   localStorage.setItem("authToken", token);
 }
-
+` `
 export function clearToken() {
   localStorage.removeItem("authToken");
 }
@@ -33,47 +33,23 @@ async function handleResponse(res) {
   return res.json();
 }
 
-export async function apiGet(path) {
+async function apiRequest(path, method = "GET", body, hasBody = body !== undefined) {
+  const headers = { ...authHeaders() };
+  if (hasBody) headers["Content-Type"] = "application/json";
+
   const res = await fetch(getBackendUrl() + path, {
-    headers: { ...authHeaders() },
+    method,
+    headers,
+    ...(hasBody ? { body: JSON.stringify(body) } : {}),
   });
   return handleResponse(res);
 }
 
-export async function apiPost(path, body) {
-  const res = await fetch(getBackendUrl() + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(res);
-}
-
-export async function apiPut(path, body) {
-  const res = await fetch(getBackendUrl() + path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(res);
-}
-
-export async function apiPatch(path, body) {
-  const res = await fetch(getBackendUrl() + path, {
-    method: "PATCH",
-    headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...authHeaders() },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return handleResponse(res);
-}
-
-export async function apiDelete(path) {
-  const res = await fetch(getBackendUrl() + path, {
-    method: "DELETE",
-    headers: { ...authHeaders() },
-  });
-  return handleResponse(res);
-}
+export const apiGet = (path) => apiRequest(path);
+export const apiPost = (path, body) => apiRequest(path, "POST", body, true);
+export const apiPut = (path, body) => apiRequest(path, "PUT", body, true);
+export const apiPatch = (path, body) => apiRequest(path, "PATCH", body, Boolean(body));
+export const apiDelete = (path) => apiRequest(path, "DELETE");
 
 // ---------------- Auth ----------------
 
@@ -96,6 +72,10 @@ export async function login(email, password) {
 
 export async function fetchCurrentUser() {
   return apiGet("/auth/me");
+}
+
+export async function recordLogout() {
+  return apiPost("/auth/logout", {});
 }
 
 export function logout() {
