@@ -3,13 +3,14 @@ import Dashboard from "./Dashboard.jsx";
 import PolicyManager from "./PolicyManager.jsx";
 import ManageUsers from "./ManageUsers.jsx";
 import AuthScreen from "./AuthScreen.jsx";
-import { getBackendUrl, setBackendUrl, getToken, fetchCurrentUser, logout } from "./api.js";
+import { getToken, fetchCurrentUser, logout, recordLogout } from "./api.js";
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [tab, setTab] = useState("dashboard");
-  const [backendUrlInput, setBackendUrlInput] = useState(getBackendUrl());
+  const [authNotice, setAuthNotice] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
     async function restoreSession() {
@@ -29,15 +30,17 @@ export default function App() {
     restoreSession();
   }, []);
 
-  function saveBackendUrl() {
-    setBackendUrl(backendUrlInput.trim());
-    window.location.reload();
-  }
-
-  function handleLogout() {
-    logout();
-    setUser(null);
-    setTab("dashboard");
+  async function handleLogout() {
+    try {
+      await recordLogout();
+      setAuthNotice("");
+    } catch (err) {
+      setAuthNotice(`Logged out locally, but the backend could not record the logout: ${err.message}`);
+    } finally {
+      logout();
+      setUser(null);
+      setTab("dashboard");
+    }
   }
 
   if (checkingSession) {
@@ -45,7 +48,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthScreen onAuthed={setUser} />;
+    return <AuthScreen onAuthed={setUser} notice={authNotice} />;
   }
 
   const isOwner = user.role === "owner";
@@ -56,8 +59,23 @@ export default function App() {
         <div>
           <h1 className="text-xl font-bold">API Rate Limit Control Plane</h1>
           <p className="text-sm text-gray-500 mb-6">
-            Logged in as {user.email} ({user.role})
+            Logged in as {user.email} ({user.role}) · {user.company_name} (Company ID: {user.company_id})
           </p>
+          {isOwner && user.company_api_key && (
+            <p className="text-xs text-gray-500 -mt-5 mb-6">
+              Simulator API key:{" "}
+              <code className="text-gray-300">
+                {showApiKey ? user.company_api_key : "••••••••••••••••"}
+              </code>
+              <button
+                type="button"
+                className="ml-2 text-blue-400 hover:text-blue-300 underline"
+                onClick={() => setShowApiKey((visible) => !visible)}
+              >
+                {showApiKey ? "Hide" : "Reveal"}
+              </button>
+            </p>
+          )}
         </div>
         <button
           onClick={handleLogout}
@@ -66,16 +84,6 @@ export default function App() {
           Log Out
         </button>
       </div>
-
-      {/* <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6 flex gap-3 items-end">
-        <label className="block flex-1">
-          <span className="block text-xs text-gray-500 mb-1">Backend URL</span>
-          <input className="input" value={backendUrlInput} onChange={(e) => setBackendUrlInput(e.target.value)} />
-        </label>
-        <button onClick={saveBackendUrl} className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-2 rounded">
-          Save
-        </button>
-      </div> */}
 
       <div className="flex gap-2 mb-6 border-b border-gray-800">
         <TabButton active={tab === "dashboard"} onClick={() => setTab("dashboard")}>
