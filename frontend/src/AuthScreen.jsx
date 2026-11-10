@@ -7,6 +7,7 @@ export default function AuthScreen({ onAuthed, notice = "" }) {
   const [targetUrl, setTargetUrl] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -98,15 +99,26 @@ export default function AuthScreen({ onAuthed, notice = "" }) {
 
         <label className="block">
           <span className="block text-xs text-gray-400 mb-1">Password *</span>
-          <input
-            className="input"
-            type="password"
-            placeholder="••••••••"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-          />
+          <div className="relative">
+            <input
+              className="input pr-10"
+              type={showPassword ? "text" : "password"}
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+            />
+            <button
+              type="button"
+              className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-200"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+            >
+              <span aria-hidden="true">👁️</span>
+            </button>
+          </div>
         </label>
 
         <button
